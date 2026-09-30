@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Stream query</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 2rem; background: #f5f6f8; color: #1c1f24; }
+    table { border-collapse: collapse; width: 100%; background: #fff; }
+    th, td { border: 1px solid #d7dbe0; padding: 0.4rem 0.6rem; text-align: left; font-size: 0.85rem; vertical-align: top; }
+    form { background: #fff; padding: 1rem; border: 1px solid #d7dbe0; margin-bottom: 1rem; }
+    input, select, button { padding: 0.35rem 0.5rem; margin: 0.2rem; }
+    nav a { margin-right: 0.8rem; }
+    .muted { color: #667; }
+    .inactive { color: #a33; font-weight: 600; }
+    .meta { font-family: ui-monospace, monospace; font-size: 0.8rem; }
+    tr.inactive-row td { background: #fdecec; }
+  </style>
+</head>
+<body>
+  <nav><a href="/pages/recipe">recipe</a><a href="/pages/batch">batch</a><a href="/pages/discharge">discharge</a><a href="/pages/alarms">alarms</a><a href="/pages/query">query</a></nav>
+  <h1>Stream query</h1>
+  <form id="open">
+    <label>type
+      <select name="type">
+        <option value="stream">stream (continue across rollback)</option>
+        <option value="ledger">ledger (invalidate on fork)</option>
+        <option value="replay">replay (frozen tick)</option>
+      </select>
+    </label>
+    <input name="limit" value="20" size="4">
+    <input name="kind" placeholder="kind" size="16">
+    <input name="origin" placeholder="origin" size="10">
+    <input name="as_of_tick" placeholder="as_of_tick" size="8">
+    <button type="submit">open walk</button>
+  </form>
+  <p>
+    <button id="next" type="button" disabled>next page</button>
+    <button id="audit" type="button">show page audit</button>
+    <span id="status" class="muted"></span>
+  </p>
+  <p class="meta" id="walk"></p>
+  <table>
+    <thead><tr><th>seq</th><th>tick</th><th>kind</th><th>origin</th><th>active</th><th>tombstone</th><th>payload</th></tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+  <pre id="audit-out" class="meta" hidden></pre>
+  <script id="plant-state" type="application/json"><!--STATE--></script>
+  <script>
+    let cursor = null;
+    let policy = null;
+    const rowsBody = document.getElementById('rows');
+    const status = document.getElementById('status');
+    const walk = document.getElementById('walk');
+    const nextBtn = document.getElementById('next');
+
+    function esc(value) {
+      return String(value).replace(/[&<>"]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+    }
+    function render(page) {
+      cursor = page.cursor;
+      policy = page.policy;
+      walk.textContent = `walk ${page.walk_id} · ${page.query_type}/${page.policy} · after ${page.next_after_seq} of pin ${page.pinned_end_seq}${page.tail_open ? ' (live tail)' : ''}`;
+      for (const row of page.rows) {
+        const tr = document.createElement('tr');
+        if (!row.active) tr.className = 'inactive-row';
+        tr.innerHTML = `<td>${row.seq}</td><td>${row.tick}</td><td>${esc(row.kind)}</td><td>${esc(row.origin)}</td>`
+          + `<td class="${row.active ? '' : 'inactive'}">${row.active}</td><td>${row.tombstone_of ?? ''}</td>`
+          + `<td class="meta">${esc(JSON.stringify(row.payload))}</td>`;
+        rowsBody.appendChild(tr);
+      }
+      const stateMsg = page.idempotent ? 'idempotent replay' : (page.has_more ? 'more rows' : (page.at_pin_end ? 'end of pinned walk' : 'at live tail'));
+      status.textContent = stateMsg;
+      nextBtn.disabled = !(page.has_more || page.tail_open);
+    }
+    async function getJson(path) {
+      const response = await fetch(path);
+      const payload = await response.json();
+      if (!response.ok) throw payload;
+      return payload;
+    }
+    document.getElementById('open').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      rowsBody.innerHTML = '';
+      const params = new URLSearchParams();
+      for (const [key, value] of new FormData(event.target).entries()) {
+        if (value) params.set(key, value);
+      }
+      try {
+        render(await getJson('/api/query/open?' + params.toString()));
+      } catch (error) {
+        status.textContent = `${error.code}: ${error.message}`;
+      }
+    });
+    nextBtn.addEventListener('click', async () => {
+      if (!cursor) return;
+      try {
+        render(await getJson('/api/query/next?cursor=' + encodeURIComponent(cursor)));
+      } catch (error) {
+        status.textContent = `${error.code}: ${error.message} ${error.context?.restart_hint ? '— ' + error.context.restart_hint : ''}`;
+        nextBtn.disabled = true;
+      }
+    });
+    document.getElementById('audit').addEventListener('click', async () => {
+      const out = document.getElementById('audit-out');
+      const data = await getJson('/api/query/audit?limit=100');
+      out.textContent = JSON.stringify(data, null, 2);
+      out.hidden = !out.hidden;
+    });
+  </script>
+</body>
+</html>

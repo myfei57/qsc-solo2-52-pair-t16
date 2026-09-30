@@ -17,12 +17,12 @@ from tests.support import publish_and_select
 
 
 def test_pages_are_declared() -> None:
-    assert set(PAGES) == {"recipe", "batch", "discharge", "alarms"}
+    assert set(PAGES) == {"recipe", "batch", "discharge", "alarms", "query"}
 
 
 def test_every_page_renders_with_live_state(runtime: PlantRuntime) -> None:
     store = PageStore(runtime.config.web_dir)
-    assert store.names() == ("alarms", "batch", "discharge", "recipe")
+    assert store.names() == ("alarms", "batch", "discharge", "query", "recipe")
     for name in store.names():
         page = store.load(name)
         rendered = inject_snapshot(page, runtime.state())

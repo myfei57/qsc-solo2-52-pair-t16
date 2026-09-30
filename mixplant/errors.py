@@ -113,6 +113,34 @@ class MethodNotAllowedError(MixPlantError):
     http_status = 405
 
 
+class CursorError(MixPlantError):
+    """A page cursor cannot be used the way the caller asked for."""
+
+    code = "cursor_error"
+    http_status = 409
+
+
+class InvalidCursorError(CursorError):
+    """A cursor is malformed, unsigned or signed for another station."""
+
+    code = "invalid_cursor"
+    http_status = 400
+
+
+class CursorForkedError(CursorError):
+    """A cursor crosses a rollback fork its query type cannot continue over."""
+
+    code = "cursor_forked"
+    http_status = 409
+
+
+class CursorExpiredError(CursorError):
+    """A cursor names a pinned view (as-of tick / boundary) that is gone."""
+
+    code = "cursor_expired"
+    http_status = 410
+
+
 class RestoreError(MixPlantError):
     """Restart could not rebuild a state the watermark rules accept."""
 

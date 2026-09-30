@@ -4,6 +4,7 @@
   "port": 8080,
   "data_dir": "var/state",
   "web_dir": "web",
+  "page_secret": "change-me-in-production",
   "limits": {
     "mix_time_ticks": 6,
     "moisture_max_percent": 9.0,

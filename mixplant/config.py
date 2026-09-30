@@ -53,6 +53,7 @@ class StationConfig:
     port: int = 8080
     data_dir: Path = Path("var/state")
     web_dir: Path = Path("web")
+    page_secret: str = "mixplant-dev-page-secret"
     limits: Limits = field(default_factory=Limits)
     defaults: ValidityDefaults = field(default_factory=ValidityDefaults)
 
@@ -68,6 +69,7 @@ class StationConfig:
             port=int(document.get("port", 8080)),
             data_dir=Path(str(document.get("data_dir", "var/state"))),
             web_dir=Path(str(document.get("web_dir", "web"))),
+            page_secret=str(document.get("page_secret", "mixplant-dev-page-secret")),
             limits=limits,
             defaults=defaults,
         )

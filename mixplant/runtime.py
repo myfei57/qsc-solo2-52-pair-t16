@@ -6,6 +6,7 @@ from typing import Any, Callable, Mapping
 
 from .agg.service import AggService
 from .audit.service import AuditService
+from .audit.trail import PageAuditTrail
 from .cement.service import CementService
 from .chute.service import ChuteService
 from .clock import ManualClock
@@ -27,6 +28,9 @@ from .moist.service import MoistService
 from .moist.table import default_table
 from .ns.registry import DeviceKind
 from .ns.topology import build_registry, default_topology
+from .paging.cursor import CursorCodec
+from .paging.policy import STREAM
+from .paging.service import PageService
 from .plant.controller import PlantController
 from .plant.status import compose_plant_status
 from .plant.tools import integer, number, optional_integer, optional_number, optional_text, text
@@ -110,6 +114,15 @@ class PlantRuntime:
         self.pump = PumpService(self.context, self.machines["delivery"])
         self.sampler = SamplerService(self.context, self.recipes, self.machines["delivery"])
         self.audit = AuditService(self.context, self.machines["batch"], alarms=self.alarms)
+        trail_path = None if storage == "memory" else self.config.data_dir / "page-audit.jsonl"
+        self.page_trail = PageAuditTrail(trail_path, clock=self.clock)
+        self.pages = PageService(
+            self.store,
+            self.clock,
+            CursorCodec(self.config.station, self.config.page_secret),
+            self.ids,
+            audit_hook=self._audit_page,
+        )
         self.controller = PlantController(self)
         self.boot_report: RestoreReport | None = None
         self._services: dict[str, PlantService] = {
@@ -144,6 +157,7 @@ class PlantRuntime:
         report = self.store.restore(self.clock.now())
         self.boot_report = report
         self._restore_id_counters()
+        self._restore_walk_counters()
         self._adopt_records()
         self._hydrate_machines()
         self.store.publish(
@@ -175,6 +189,23 @@ class PlantRuntime:
         self.ids.restore("snap", len(self.store.snapshots.load_all()))
         samples = sum(1 for record in self.store.visible() if record.kind == "sampler.record")
         self.ids.restore("sample", samples)
+
+    def _restore_walk_counters(self) -> None:
+        """Raise walk ids past every id recorded in the durable page trail.
+
+        Walk ids are part of every cursor; keeping them unique across a restart
+        ensures a stale cursor cannot alias a freshly opened walk.
+        """
+
+        issued = 0
+        for event in self.page_trail.events():
+            raw = str(event.detail.get("walk_id", ""))
+            if raw.startswith("walk-"):
+                try:
+                    issued = max(issued, int(raw.split("-", 1)[1]))
+                except ValueError:
+                    continue
+        self.ids.restore("walk", issued)
 
     def _adopt_records(self) -> None:
         """Adopt everything the stream still carries."""
@@ -303,6 +334,42 @@ class PlantRuntime:
             "delta": self.view.delta(tick).describe(),
         }
 
+    def query_types(self) -> dict[str, Any]:
+        """Return the fixed per-query-type cursor policy table."""
+
+        return {"query_types": self.pages.query_types()}
+
+    def page_audit(self, limit: int = 50) -> dict[str, Any]:
+        """Return the durable trail of page servings."""
+
+        return self.page_trail.describe(limit=limit)
+
+    def open_page(self, params: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        """Open a fresh fixed order walk and return its first page."""
+
+        params = params or {}
+        return self.pages.open_page(
+            str(params.get("type") or STREAM),
+            limit=_optional_int(params, "limit"),
+            kind=_optional_text(params, "kind"),
+            origin=_optional_text(params, "origin"),
+            as_of_tick=_optional_int(params, "as_of_tick"),
+        ).describe(self.pages.codec)
+
+    def continue_page(self, token: str) -> dict[str, Any]:
+        """Continue a walk from the cursor a previous page returned."""
+
+        return self.pages.continue_page(token).describe(self.pages.codec)
+
+    def _audit_page(self, name: str, detail: Mapping[str, Any]) -> None:
+        """Append one page serving decision to the page audit trail.
+
+        The trail is separate from the production journal so a read never
+        appends a record into the stream it is walking.
+        """
+
+        self.page_trail.record(name, detail)
+
     def publish_baseline(
         self,
         name: str,
@@ -362,12 +429,21 @@ class PlantRuntime:
         """Tombstone every committed record after ``seq``."""
 
         records = self.store.rollback_after(seq, reason=reason, origin="console", generation=0)
-        return {
+        result = {
             "tombstones": [
                 {"seq": record.seq, "tombstone_of": record.tombstone_of} for record in records
             ],
             "watermark": self.store.watermark().describe(),
         }
+        self.audit.note(
+            "store.rolled_back",
+            {
+                "after_seq": seq,
+                "reason": reason,
+                "tombstoned": [int(record.tombstone_of) for record in records if record.tombstone_of],
+            },
+        )
+        return result
 
     def advance_ticks(self, ticks: int = 1) -> int:
         """Move the deterministic clock forward and record where it went."""
@@ -499,6 +575,7 @@ class PlantRuntime:
 
     def close(self) -> None:
         self.store.close()
+        self.page_trail.close()
 
     def _file_sample(self, litres: float) -> dict[str, Any]:
         """File a laboratory sample and copy it into the ledger."""
@@ -528,3 +605,17 @@ class PlantRuntime:
     def _detail(payload: Mapping[str, Any]) -> dict[str, Any]:
         raw = payload.get("detail")
         return dict(raw) if isinstance(raw, Mapping) else {}
+
+
+def _optional_int(params: Mapping[str, Any], name: str) -> int | None:
+    raw = params.get(name)
+    if raw in (None, ""):
+        return None
+    return int(raw)
+
+
+def _optional_text(params: Mapping[str, Any], name: str) -> str | None:
+    raw = params.get(name)
+    if raw in (None, ""):
+        return None
+    return str(raw)
