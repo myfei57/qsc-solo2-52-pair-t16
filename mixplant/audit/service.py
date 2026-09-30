@@ -34,6 +34,18 @@ class AuditService(PlantService):
         self.publish(ENTRY_KIND, entry.describe())
         return {"entry": entry.describe(), "count": self.ledger.count()}
 
+    def note_read(self, name: str, detail: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Record a read only event in the shift ledger.
+
+        Console paging is audited but must never append to the stream being
+        paged: resuming the same cursor concurrently has to return the same
+        rows, so a read audit cannot consume a fresh sequence.
+        """
+
+        entry = audit_entry(name=name, origin=self.origin, tick=self.context.clock.now(), detail=detail or {})
+        self.ledger.record(entry)
+        return {"entry": entry.describe(), "count": self.ledger.count()}
+
     def note_sample(self, *, batch_id: str, sample_id: str) -> dict[str, Any]:
         """Record that a laboratory sample was filed."""
 

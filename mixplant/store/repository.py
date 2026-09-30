@@ -11,8 +11,9 @@ from ..errors import NotDurableError, RecordError, RestoreError, UnknownRecordEr
 from ..ids import SequenceIds
 from ..versioning.expiry import Validity
 from .codec import ENTRY_APPEND, ENTRY_COMMIT, ENTRY_DURABLE, JournalEntry
+from .epoch import Epoch, stream_epoch
 from .journal import FileBackend, LogBackend, MemoryBackend
-from .records import TOMBSTONE_KIND, Record
+from .records import ROLLBACK_MARKER_KIND, TOMBSTONE_KIND, Record
 from .replay import merge_state, reduce_state
 from .snapshot import Snapshot, SnapshotStore
 from .tombstone import effective_records, rollback_targets
@@ -191,6 +192,11 @@ class RecordRepository:
 
         return tuple(self._records[: self._committed_seq])
 
+    def epoch(self) -> Epoch:
+        """Return the rollback epoch the committed stream currently sits at."""
+
+        return stream_epoch(self.committed_records())
+
     def state(self) -> dict[str, Any]:
         return reduce_state(self.visible())
 
@@ -242,15 +248,42 @@ class RecordRepository:
         origin: str,
         generation: int,
     ) -> tuple[Record, ...]:
-        """Tombstone every committed record after ``seq`` in one commit."""
+        """Tombstone every committed record after ``seq`` in one commit.
+
+        One rollback may hide many records, so after the tombstones a single
+        ``store.rollback`` marker is appended.  The marker is what readers
+        count to derive the consistency epoch; the journal keeps every line.
+        """
 
         targets = rollback_targets(self._records[: self._committed_seq], seq)
         if not targets:
             return ()
         records = tuple(self._append_tombstone(target, reason, origin, generation) for target in targets)
+        self._append_rollback_marker(after_seq=seq, targets=targets, reason=reason, origin=origin, generation=generation)
         self.flush()
-        self.commit_through(records[-1].seq)
+        self.commit_through(len(self._records))
         return records
+
+    def _append_rollback_marker(
+        self,
+        *,
+        after_seq: int,
+        targets: tuple[int, ...],
+        reason: str,
+        origin: str,
+        generation: int,
+    ) -> Record:
+        record = Record.create(
+            seq=len(self._records) + 1,
+            kind=ROLLBACK_MARKER_KIND,
+            origin=origin,
+            generation=generation,
+            tick=self._clock.now(),
+            payload={"active": True, "reason": reason, "boundary": after_seq, "targets": list(targets)},
+        )
+        self._records.append(record)
+        self._append_entry(JournalEntry(entry_type=ENTRY_APPEND, tick=record.tick, record=record))
+        return record
 
     def snapshot(self, *, generation: int, validity: Validity, scope: str = "snap") -> Snapshot:
         """Materialise the committed state and store it."""

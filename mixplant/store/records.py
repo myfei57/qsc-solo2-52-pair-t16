@@ -119,3 +119,8 @@ class Record:
 
 
 TOMBSTONE_KIND = "store.tombstone"
+ROLLBACK_MARKER_KIND = "store.rollback"
+
+# Record kinds that describe the stream itself.  They must never be folded into
+# the derived plant state, but they stay in the committed journal forever.
+INTERNAL_KINDS = frozenset({TOMBSTONE_KIND, ROLLBACK_MARKER_KIND})

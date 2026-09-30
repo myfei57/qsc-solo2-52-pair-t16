@@ -22,6 +22,11 @@ def register(router: Router, runtime: Any, pages: Any) -> None:
     router.add("GET", "/api/plant", lambda _: Response.json(runtime.controller.manifest()))
     router.add("GET", "/api/diagnostics", lambda _: Response.json(runtime.controller.diagnostics()))
     router.add("GET", "/api/records", lambda request: Response.json(runtime.records(dict(request.query))))
+    router.add(
+        "GET",
+        "/api/records/page",
+        lambda request: Response.json(runtime.page_records(dict(request.query))),
+    )
     router.add("GET", "/api/history", _history(runtime))
 
 

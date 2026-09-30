@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Iterable, Mapping
 
-from .records import Record
+from .records import INTERNAL_KINDS, Record
 from .tombstone import effective_records
 
 
@@ -13,7 +13,7 @@ def reduce_state(records: Iterable[Record]) -> dict[str, Any]:
 
     state: dict[str, Any] = {}
     for rec in records:
-        if rec.is_tombstone:
+        if rec.kind in INTERNAL_KINDS:
             continue
         bucket = state.setdefault(rec.group, {})
         entry: dict[str, Any] = dict(rec.payload)

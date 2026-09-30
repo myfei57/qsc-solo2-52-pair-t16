@@ -24,8 +24,20 @@ def register(router: Router, runtime: Any, pages: Any) -> None:
         lambda _: Response.html(inject_snapshot(pages.load("alarms"), runtime.controller.alarm_view())),
     )
     router.add("GET", "/api/alarms", lambda _: Response.json(runtime.controller.alarm_view()))
+    router.add(
+        "GET",
+        "/api/audit/ledger",
+        lambda request: Response.json(runtime.audit.ledger.describe(limit=_int(request.query.get("limit"), 50))),
+    )
     for method, path, command in COMMANDS:
         router.add(method, path, _command(runtime, command))
+
+
+def _int(raw: Any, default: int) -> int:
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return default
 
 
 def _command(runtime: Any, command: str):

@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Callable, Mapping
 
 from .agg.service import AggService
+from .audit.audit import PAGE_READ, PAGE_REFUSED
 from .audit.service import AuditService
 from .cement.service import CementService
 from .chute.service import ChuteService
@@ -12,10 +13,11 @@ from .clock import ManualClock
 from .config import StationConfig
 from .context import SharedContext
 from .decision.batch import BatchRegistry
+from .decision.paging import page_query_from_params, read_page
 from .decision.query import query_from_params, run_query
 from .decision.stateview import StateView
 from .decision.thresholds import ThresholdSet
-from .errors import NotFoundError
+from .errors import NotFoundError, StaleCursorError
 from .event.bus import Event, EventBus
 from .event.subscribers import AlarmCollector, AuditSubscriber
 from .event.topics import ALARM, STORE
@@ -292,6 +294,55 @@ class PlantRuntime:
 
         query = query_from_params(params or {})
         return run_query(self.store.committed_records(), query).describe()
+
+    def page_records(self, params: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        """Serve one fixed order page and record the read in the shift ledger.
+
+        The page is driven forward by the opaque ``cursor`` only; whether a
+        cursor survives a rollback is fixed by the query type inside
+        :func:`read_page`.  Every served page and every refused cursor lands
+        in the audit ledger so replay, cursors and the trail can be checked
+        against the same sequences and epochs.
+        """
+
+        parameters = dict(params or {})
+        query = page_query_from_params(parameters)
+        raw_cursor = parameters.get("cursor")
+        cursor = None if raw_cursor in (None, "") else str(raw_cursor)
+        try:
+            page = read_page(self.store.committed_records(), query, cursor=cursor)
+        except StaleCursorError as error:
+            self.audit.note_read(
+                PAGE_REFUSED,
+                {
+                    "view": query.view,
+                    "kind": query.kind,
+                    "origin": query.origin,
+                    "page_size": query.page_size,
+                    "reason": error.code,
+                    "cursor_epoch": error.context.get("cursor_epoch"),
+                    "current_epoch": error.context.get("current_epoch"),
+                },
+            )
+            raise
+        payload = page.describe()
+        self.audit.note_read(
+            PAGE_READ,
+            {
+                "view": query.view,
+                "kind": query.kind,
+                "origin": query.origin,
+                "page_size": query.page_size,
+                "returned": payload["returned"],
+                "scanned": payload["scanned"],
+                "seq_range": payload["seq_range"],
+                "epoch": payload["epoch"],
+                "cursor_epoch": payload["cursor_epoch"],
+                "epoch_changed": payload["epoch_changed"],
+                "continued": cursor is not None,
+            },
+        )
+        return payload
 
     def history(self, tick: int) -> dict[str, Any]:
         """Compare the current state with the state at ``tick``."""

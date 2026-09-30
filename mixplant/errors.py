@@ -66,6 +66,24 @@ class StaleGenerationError(MixPlantError):
     http_status = 409
 
 
+class StaleCursorError(MixPlantError):
+    """A paging cursor belongs to a consistency epoch that was rolled back.
+
+    Only the rollback sensitive ``effective`` view raises it; the append only
+    ``journal`` view keeps serving the cursor and reports ``epoch_changed``.
+    """
+
+    code = "stale_cursor"
+    http_status = 409
+
+
+class CursorError(MixPlantError):
+    """A paging cursor cannot be decoded, was tampered with or changed query."""
+
+    code = "invalid_cursor"
+    http_status = 400
+
+
 class OverLimitError(MixPlantError):
     """A measured value crossed a configured upper bound."""
 

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Iterable, Mapping
 
 from ..errors import ValidationError
-from ..store.records import Record
+from ..store.records import INTERNAL_KINDS, Record
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,7 +28,7 @@ class RecordQuery:
     def matches(self, record: Record) -> bool:
         """Return whether ``record`` passes every condition."""
 
-        if record.is_tombstone and not self.include_tombstones:
+        if record.kind in INTERNAL_KINDS and not self.include_tombstones:
             return False
         if self.kind is not None and record.kind != self.kind:
             return False

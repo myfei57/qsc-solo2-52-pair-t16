@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Iterable
 
-from .records import Record
+from .records import INTERNAL_KINDS, Record
 
 
 def hidden_sequences(records: Iterable[Record]) -> frozenset[int]:
@@ -19,11 +19,15 @@ def hidden_sequences(records: Iterable[Record]) -> frozenset[int]:
 
 
 def effective_records(records: Iterable[Record]) -> tuple[Record, ...]:
-    """Return the records that survive tombstoning, tombstones excluded."""
+    """Return the records that survive tombstoning, internal records excluded."""
 
     materialised = tuple(records)
     hidden = hidden_sequences(materialised)
-    return tuple(rec for rec in materialised if not rec.is_tombstone and rec.seq not in hidden)
+    return tuple(
+        rec
+        for rec in materialised
+        if rec.kind not in INTERNAL_KINDS and rec.seq not in hidden
+    )
 
 
 def rollback_targets(records: Iterable[Record], after_seq: int) -> tuple[int, ...]:
